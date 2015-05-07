@@ -1,0 +1,953 @@
+REPLACE	PROCEDURE  DATABSE_NAME.DATA_COMPARE
+( IN SOURCE1 VARCHAR(100),IN TARGET1 VARCHAR(100),IN IN_SOURCE_WHERE VARCHAR(10000),IN IN_TARGET_WHERE VARCHAR(10000),IN NO_OF_PK_COLS INTEGER,
+		IN SRC_Col_Val varchar(20000),IN TGT_Col_Val varchar(20000),IN PI_COLUMNS VARCHAR(1000),OUT sqlQueryGen CLOB
+		)
+/*------------------------------------------------------ 
+
+--  NAME:  DATA_COMPARE
+--  DESCRIPTION: Generates MISMATCH Query AS an OUTPUT
+--
+--  INPUT : SOURCE TABLE(DATABASENAME.TABLENAME)
+--               TARGET TABLE(DATABASENAME.TABLENAME)
+--               FILTER CONDITION(PERIOD DATE,LOAD DATE.....)
+--               NUMBER OF FIELDS IN A PRIMARY KEY(COMPOSITE)
+--               SOURCE COLUMNS (DELIMITED BY '-',,WITH OR WITHOUT CASTING)
+--				TARGET COLUMNS (DELIMITED BY '-',,WITH OR WITHOUT CASTING)
+--				PI_COLUMNS(DELIMITED BY '-')	Mention this fields as 'NO'  if no PI_COLUMN is present
+--                 
+--  OUTPUT :  
+--                    Procedure generates a queries.
+--                   
+--           
+-- -------------------------------------------------------------*/
+BEGIN	
+DECLARE	SRC_Col_Val_Current VARCHAR(20000);
+DECLARE	TGT_Col_Val_Current VARCHAR(20000);
+DECLARE	SRC_Col_Val_Length INTEGER;
+DECLARE	TGT_Col_Val_Length INTEGER;
+DECLARE	Compare_Columns clob;
+DECLARE	SEL_LIST clob;
+DECLARE	SRC_Val1 VARCHAR(100);
+DECLARE	TGT_Val1 VARCHAR(100);
+DECLARE	SRC_Pos1 INTEGER;
+DECLARE	TGT_Pos1 INTEGER;
+DECLARE	SRC_Col_Index INTEGER;
+DECLARE	TGT_Col_Index INTEGER;
+DECLARE	Final_Query clob(100000);
+DECLARE	Final_Query1 VARCHAR(50000);
+DECLARE	Final_Query2 VARCHAR(50000);
+DECLARE	Create_Temp VARCHAR(50000);
+DECLARE	Create_Temp1 VARCHAR(50000);
+DECLARE	Create_Temp2 VARCHAR(50000);
+DECLARE	Unmatched_Records VARCHAR(6000);
+--DECLARE MATCH VARCHAR(10);
+DECLARE	MISMATCH VARCHAR(10);
+DECLARE	COMMA VARCHAR(2);
+DECLARE	n integer;
+DECLARE	k integer;
+DECLARE i integer;
+DECLARE	COL VARCHAR(100);
+
+DECLARE	SRC_PK VARCHAR(1000);
+DECLARE	TGT_PK VARCHAR(1000);
+DECLARE	SRC_WHERE VARCHAR(10000);
+DECLARE	TGT_WHERE VARCHAR(10000);
+DECLARE	SRC_Table VARCHAR(30);
+DECLARE	SRC_DBName VARCHAR(30);
+DECLARE	TGT_DBName VARCHAR(30);
+DECLARE	TGT_Table VARCHAR(30);
+
+DECLARE	X VARCHAR(6);
+DECLARE	Y INTEGER;
+DECLARE	Z VARCHAR(10);
+DECLARE	TEMP_SRC  VARCHAR(1000);
+DECLARE	SRC_Val2  VARCHAR(1000);
+DECLARE	TGT_Val2  VARCHAR(1000);
+
+DECLARE	SRC_Val3  VARCHAR(1000);
+DECLARE	TGT_Val3  VARCHAR(1000);
+
+DECLARE SOURCE_WHERE VARCHAR(20000);
+DECLARE TARGET_WHERE VARCHAR(20000);
+DECLARE COL_LIST VARCHAR(20000);
+
+DECLARE COLUMN_LIST VARCHAR(20000);
+
+DECLARE PI_COLS VARCHAR(20000);
+DECLARE SELECT_LIST VARCHAR(20000);--This field is for PII columns in mismatch query
+DECLARE SELECT_LIST1 VARCHAR(20000);--This field is for PII  columns in Source and Target data :01/11/2013
+DECLARE COL_VAL1 VARCHAR(1000);
+DECLARE COL_VAL2  VARCHAR(1000);
+DECLARE COL_VAL3  VARCHAR(1000);
+DECLARE PI_COL_VAL1  VARCHAR(1000);
+
+DECLARE COL_INDEX INTEGER;
+DECLARE PI_INDEX INTEGER;
+
+DECLARE SRC_COUNT_QUERY VARCHAR(10000);
+DECLARE TGT_COUNT_QUERY VARCHAR(10000);
+
+--SPLITTING THE DATABSENAME AND TABLENAME FROM THE INPUT
+
+SET	SRC_DBName= SUBSTR(SOURCE1,0,INDEX(SOURCE1,'.'));
+SET	SRC_Table=SUBSTR(SOURCE1,INDEX(SOURCE1,'.')+1);
+SET	TGT_DBName=SUBSTR(TARGET1,0,INDEX(TARGET1,'.'));
+SET	TGT_Table=SUBSTR(TARGET1,INDEX(TARGET1,'.')+1);
+
+SET	X='<NULL>';
+SET	Y=0;
+
+ 
+SET SOURCE_WHERE=IN_SOURCE_WHERE;
+SET TARGET_WHERE=IN_TARGET_WHERE;
+ 
+SET	SRC_Pos1=0;
+SET	TGT_Pos1=0;
+SET	Compare_Columns=' ';
+SET	SEL_LIST=' ';
+SET COL_LIST='';
+SET PI_COLS=PI_COLUMNS;
+SET SELECT_LIST='';
+SET SELECT_LIST1='';
+
+SET	MISMATCH='|| ''~''|| ';
+set i=0;
+set	n=1;
+set	k=NO_OF_PK_COLS;
+SET	COMMA=',';
+SET	SRC_PK='';
+SET	TGT_PK='';
+SET	SRC_WHERE='';
+SET	TGT_WHERE='';
+
+SET	SRC_Col_Val_Current=SRC_Col_Val;
+SET	TGT_Col_Val_Current=TGT_Col_Val;
+SET	SRC_Col_Val_Length=chars(SRC_Col_Val);
+SET	TGT_Col_Val_Length=chars(TGT_Col_Val);
+
+
+
+--CHECKING WHETHER SOURCE AND TARGET TABLE NAMES SAME OR NOT
+
+CASE WHEN TRIM(SRC_Table)=TRIM(TGT_Table) THEN
+
+--LOOP TO  SPLIT THE INPUT SOURCE AND TARGET COLUMNS AND FOR THE PREPERATION OF  SELECT LIST
+--AND COMPARISION CONDITIONS
+L1:
+LOOP	
+SET	SRC_Col_Index=POSITION('-' IN SRC_Col_Val_Current); --finding the position of '- ' in the input.
+SET	TGT_Col_Index=POSITION('-' IN TGT_Col_Val_Current); --finding the position of '-'  in the input.
+ 
+CASE	
+ 
+	WHEN	(SRC_Col_Index=0 
+	AND	TGT_Col_Index=0) --THIS CASE OCCURS FOR THE LAST COLUMN IN THE INPUT COLUMNS LIST
+
+THEN 
+
+--CHECKING WHETHER CASTING HAPPENED TO THE COLUMN
+
+
+case	when index(SRC_Col_Val_Current,'.')<>0 
+	or	index(TGT_Col_Val_Current,'.')<>0  then 
+case	when index(SRC_Col_Val_Current,':string')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+--REPLACING THE NULL VALUES IN THE CHARACTER COLUMNS BY X(NULL)
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+
+SET	SRC_Val3='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+	when	 index(SRC_Col_Val_Current,':int')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+		
+	--REPLACING THE NULL VALUES IN THE INTEGER/DECIMAL COLUMNS BY Y(0)
+
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC || COMMA||Y||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Col_Val_Current || COMMA||Y||')';
+
+
+SET	SRC_Val3='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+
+	when	index(SRC_Col_Val_Current,':date')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+		--REPLACING THE NULL VALUES IN  DATE COLUMNS BY CURRENT_DATE
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC|| comma ||'date)'  ;
+SET	TGT_Val2='COALESCE ('|| TGT_Col_Val_Current|| comma ||'date)'  ;
+
+SET	SRC_Val3='COALESCE ( CAST('|| TEMP_SRC ||' AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE (CAST( '|| TGT_Col_Val_Current  ||' AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+
+else	
+SET	SRC_Val2=SRC_Col_Val_Current;
+set	TGT_Val2=TGT_Col_Val_Current;
+
+SET	SRC_Val3=SRC_Col_Val_Current;
+set	TGT_Val3=TGT_Col_Val_Current;
+
+end case	;
+else	
+case	when index(SRC_Col_Val_Current,':string')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'2.'||TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+SET	SRC_Val3='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Table||'2.'||TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+	when	 index(SRC_Col_Val_Current,':int')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC || COMMA||Y||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'2.'||TGT_Col_Val_Current || COMMA||Y||')';
+
+
+SET	SRC_Val3='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Table||'2.'||TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+	when	index(SRC_Col_Val_Current,':date')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC|| comma ||'date)'  ;
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'2.'||TGT_Col_Val_Current|| comma ||'date)'  ;
+
+SET	SRC_Val3='COALESCE (CAST('|| SRC_Table||'1.'||TEMP_SRC ||' AS VARCHAR(100))'|| COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE (CAST('|| TGT_Table||'2.'||TGT_Col_Val_Current ||' AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+
+else	
+SET	SRC_Val2=SRC_Table||'1.'||SRC_Col_Val_Current;
+set	TGT_Val2=TGT_Table||'2.'||TGT_Col_Val_Current;
+
+SET	SRC_Val3=SRC_Table||'1.'||SRC_Col_Val_Current;
+set	TGT_Val3=TGT_Table||'2.'||TGT_Col_Val_Current;
+
+end case	;
+end case	;
+
+--CASE STATEMENT TO PREPARE THE ALIAS NAMES FOR THE COLUMNS
+case	when index(SRC_Col_Val_Current,':')=0 then
+
+case	when index(SRC_Col_Val_Current,'cast(')<>0 then 
+SET	COL =substr(SRC_Col_Val_Current,index(SRC_Col_Val_Current,
+		'.')+1,index(SRC_Col_Val_Current,' as')-index(SRC_Col_Val_Current,
+		'.')-1);
+
+ELSE	
+SET	COL=SUBSTR(SRC_Col_Val_Current,INDEX(SRC_Col_Val_Current,'.')+1);
+END CASE	;
+else	
+case	when index(SRC_Col_Val_Current,'cast(')<>0 then 
+SET	COL =substr(SRC_Col_Val_Current,index(SRC_Col_Val_Current,
+		'.')+1,index(SRC_Col_Val_Current,' as')-index(SRC_Col_Val_Current,
+		'.'));
+
+ELSE	
+SET	COL =substr(SRC_Col_Val_Current,index(SRC_Col_Val_Current,
+		'.')+1,index(SRC_Col_Val_Current,':')-index(SRC_Col_Val_Current,
+		'.')-1);
+END CASE	;
+
+end case	;
+--PREPARING THE SOURCE COLUMNS LIST
+SET COL_LIST=COL_LIST||COL;
+set i=i+1;
+--PREPARING THE JOIN CONDITIONS
+SET	Compare_Columns=Compare_Columns||SRC_Val2||'<>'||TGT_Val2||' )';
+
+--PREPARING THE SELECT LIST IN  QUERY WHICH GENERATES MISMATCH REPORT
+SET	SEL_LIST=SEL_LIST||' CASE WHEN '|| SRC_Val2||'='||TGT_Val2|| ' THEN ''MATCH'' ELSE ' ||SRC_Val3|| MISMATCH ||TGT_Val3 || ' END AS '|| COL ;
+
+
+
+ 
+	WHEN	(SRC_Col_Index<>0 
+	AND	TGT_Col_Index<>0) THEN
+
+
+
+ 
+/* Divide the entire string by identifying the columns based on the '-' delimeter */
+SET	SRC_Val1=SUBSTR(SRC_Col_Val_Current,SRC_Pos1,SRC_Col_Index);
+SET	SRC_Col_Val_Current=SUBSTR(SRC_Col_Val_Current,SRC_Col_Index+1,
+		SRC_Col_Val_Length);
+SET	SRC_Col_Val_Length=chars(SRC_Col_Val);
+
+ 
+/* Divide the entire string by identifying the columns based on the '-' delimeter */
+SET	TGT_Val1=SUBSTR(TGT_Col_Val_Current,TGT_Pos1,TGT_Col_Index);
+SET	TGT_Col_Val_Current=SUBSTR(TGT_Col_Val_Current,TGT_Col_Index+1,
+		TGT_Col_Val_Length);
+SET	TGT_Col_Val_Length=chars(TGT_Col_Val);
+ 
+ 
+--n AND k USED TO WORK ON THE COMPOSITE KEY COLUMNS
+--CHECKING THE CAST CONDITION TFOR RENAMING IN SELECT LIST OF FINAL MISMATCH QUERY
+--COL   is for ALIASING purpose
+case	when n<k then 
+case	when index(SRC_Val1,'cast(')<>0 then 
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		' as')-index(SRC_Val1,'.')-1);
+
+ELSE	
+SET	COL=SUBSTR(SRC_Val1,INDEX(SRC_Val1,'.')+1);
+
+END CASE	;
+SET COL_LIST=COL_LIST||COL||COMMA;
+SET	SEL_LIST=SEL_LIST|| SRC_Val1||  ' AS '|| COL || COMMA;
+SET	Compare_Columns=Compare_Columns||SRC_Val1||'='||TGT_Val1||' AND ';
+set	n=n+1;
+set i=i+1;
+
+SET	SRC_PK=SRC_PK||SRC_Val1||COMMA;
+SET	TGT_PK=TGT_PK||TGT_Val1||COMMA;
+SET	SRC_WHERE =SRC_WHERE||'Trim(' ||SRC_Val1|| ')' ||MISMATCH;
+SET	TGT_WHERE=TGT_WHERE||'Trim(' ||TGT_Val1||')' ||MISMATCH;
+ 
+ 
+	when	k=n then 
+ 
+case	when index(SRC_Val1,'cast(')<>0 then 
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		' as')-index(SRC_Val1,'.')-1);
+
+ELSE	
+SET	COL=SUBSTR(SRC_Val1,INDEX(SRC_Val1,'.')+1);
+
+END CASE	;
+SET COL_LIST=COL_LIST||COL||COMMA;
+SET i=i+1;
+SET	SEL_LIST=SEL_LIST|| SRC_Val1||  ' AS '|| COL || COMMA;
+SET	Compare_Columns=Compare_Columns||SRC_Val1||'='||TGT_Val1||' AND (';
+set	n=k+1;
+
+SET	SRC_PK=SRC_PK||SRC_Val1;
+SET	TGT_PK=TGT_PK||TGT_Val1;
+SET	SRC_WHERE =SRC_WHERE||'Trim (' ||SRC_Val1||')';
+SET	TGT_WHERE=TGT_WHERE||'Trim('||TGT_Val1||')';
+else	
+
+
+case	when index(SRC_Val1,'.')<>0 
+	or	 index(TGT_Val1,'.')<>0 then 
+case	when index(SRC_Val1,':string')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Val1 || COMMA ||''''||X||''''||')';
+
+SET	SRC_Val3='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Val1 || COMMA ||''''||X||''''||')';
+
+
+	when	 index(SRC_Val1,':int')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC || COMMA||Y||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Val1 || COMMA||Y||')';
+
+SET	SRC_Val3='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Val1 || COMMA ||''''||X||''''||')';
+
+	when	index(SRC_Val1,':date')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC|| comma ||'date)'  ;
+SET	TGT_Val2='COALESCE ('|| TGT_Val1|| comma ||'date)'  ;
+
+SET	SRC_Val3='COALESCE (CAST('|| TEMP_SRC ||' AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE (CAST('|| TGT_Val1 ||' AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+
+else	
+SET	SRC_Val2=SRC_Val1;
+set	TGT_Val2=TGT_Val1;
+
+SET	SRC_Val3=SRC_Val1;
+set	TGT_Val3=TGT_Val1;
+
+end case	;
+else	
+case	when index(SRC_Val1,':string')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'2.'||TGT_Val1 || COMMA ||''''||X||''''||')';
+
+SET	SRC_Val3='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Table||'2.'||TGT_Val1 || COMMA ||''''||X||''''||')';
+
+	when	 index(SRC_Val1,':int')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC || COMMA||Y||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'2.'||TGT_Val1 || COMMA||Y||')';
+
+SET	SRC_Val3='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Table||'2.'||TGT_Val1 || COMMA ||''''||X||''''||')';
+
+	when	index(SRC_Val1,':date')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'1.'||TEMP_SRC|| comma ||'date)'  ;
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'2.'||TGT_Val1|| comma ||'date)'  ;
+
+SET	SRC_Val3='COALESCE (CAST('|| SRC_Table||'1.'||TEMP_SRC  ||' AS VARCHAR(100))'|| COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE (CAST('|| TGT_Table||'2.'||TGT_Val1 ||' AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+
+else	
+SET	SRC_Val2=SRC_Table||'1.'||SRC_Val1;
+set	TGT_Val2=TGT_Table||'2.'||TGT_Val1;
+
+SET	SRC_Val3=SRC_Table||'1.'||SRC_Val1;
+set	TGT_Val3=TGT_Table||'2.'||TGT_Val1;
+
+end case	;
+end case	;
+
+
+case	when index(SRC_Val1,':')=0 then
+case	when INDEX(SRC_Val1,'trim(')<>0 then 
+set	COL=substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,')')-index(SRC_Val1,
+		'.')-1);
+
+ 
+	when	index(SRC_Val1,'cast(')<>0 then 
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		' as')-index(SRC_Val1,'.')-1);
+
+ELSE	
+SET	COL=SUBSTR(SRC_Val1,INDEX(SRC_Val1,'.')+1);
+END CASE	;
+else	
+case	when INDEX(SRC_Val1,'trim(')<>0 then 
+set	COL=substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,')')-index(SRC_Val1,
+		'.')-1);
+ 
+	when	index(SRC_Val1,'cast(')<>0 then 
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		' as')-index(SRC_Val1,'.')-1);
+
+ELSE	
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		':')-index(SRC_Val1,'.')-1);
+END CASE	;
+
+end case	;
+--Source Columns list
+SET COL_LIST=COL_LIST||COL||COMMA;
+set i=i+1;
+
+--JOIN CONDITIONS INTHE FINAL MISMATCH QUERY
+SET	Compare_Columns=Compare_Columns||SRC_Val2||'<>'||TGT_Val2||' OR ';
+
+--SELECT LIST INTHE FINAL MISMATCH QUERY
+SET	SEL_LIST=SEL_LIST||' CASE WHEN '|| SRC_Val2||'='||TGT_Val2|| ' THEN ''MATCH'' ELSE ' ||SRC_Val3|| MISMATCH ||TGT_Val3 || ' END AS '|| COL || COMMA;
+
+
+end case	;
+
+
+ 
+END CASE	;
+IF	(SRC_Col_Index=0 
+	OR	TGT_Col_Index=0) THEN 
+	LEAVE	L1;
+END IF	;
+ 
+END LOOP	L1;
+SET n=0;
+--FINAL MISMATCH QUERY
+SET	Final_Query = 'SELECT ' ||SEL_LIST || ' FROM ' ||SRC_DBName||'.'||SRC_Table ||'  '||SRC_Table||'1'|| COMMA   ||TGT_DBName||'.'||TGT_Table  ||'  '||TGT_Table||'2'|| '  WHERE ' ||Compare_Columns ||' AND '|| 
+SOURCE_WHERE || ' AND '|| TARGET_WHERE ;
+--Query to generate the records present in source not present in target
+--SET Final_Query1 = 'SELECT * FROM ' ||SRC_DBName||'.'||SRC_Table ||'  '||SRC_Table||'1'||  '  WHERE '|| SOURCE_WHERE || ' AND '||SRC_WHERE||' NOT IN (SEL '||TGT_WHERE ||' FROM '  ||TGT_DBName||'.'||TGT_Table||'  '||TGT_Table||'2'||  '  WHERE '|| TARGET_WHERE ||')';
+--Modified not to display the PII data :01/11/2013
+
+SET Final_Query1 = ' FROM ' ||SRC_DBName||'.'||SRC_Table ||'  '||SRC_Table||'1'||  '  WHERE '|| SOURCE_WHERE || ' AND '||SRC_WHERE||' NOT IN (SEL '||TGT_WHERE ||' FROM '  ||TGT_DBName||'.'||TGT_Table||'  '||TGT_Table||'2'||  '  WHERE '|| TARGET_WHERE ||')';
+
+--Query to generate the records present in target not present in source
+
+--SET Final_Query2 = 'SELECT*  FROM '  ||TGT_DBName||'.'||TGT_Table||'  '||TGT_Table||'2'||  '  WHERE '|| TARGET_WHERE ||' AND ' ||TGT_WHERE || ' NOT IN (SEL ' ||SRC_WHERE || ' FROM ' ||SRC_DBName||'.'||SRC_Table ||'  '||SRC_Table||'1'||  ' WHERE '|| SOURCE_WHERE || ')';
+--Modified not to display the PII data :01/11/2013
+
+SET Final_Query2 = '  FROM '  ||TGT_DBName||'.'||TGT_Table||'  '||TGT_Table||'2'||  '  WHERE '|| TARGET_WHERE ||' AND ' ||TGT_WHERE || ' NOT IN (SEL ' ||SRC_WHERE || ' FROM ' ||SRC_DBName||'.'||SRC_Table ||'  '||SRC_Table||'1'||  ' WHERE '|| SOURCE_WHERE || ')';
+
+
+ELSE
+
+L1:
+LOOP	
+SET	SRC_Col_Index=POSITION('-' IN SRC_Col_Val_Current); --finding the position of '- ' in the input.
+SET	TGT_Col_Index=POSITION('-' IN TGT_Col_Val_Current); --finding the position of '-'  in the input.
+ 
+CASE	
+ 
+	WHEN	(SRC_Col_Index=0 
+	AND	TGT_Col_Index=0) --THIS CASE OCCURS FOR THE LAST COLUMN IN THE INPUT COLUMNS LIST
+
+THEN 
+
+--CHECKING WHETHER CASTING HAPPENED TO THE COLUMN
+
+
+case	when index(SRC_Col_Val_Current,'.')<>0 
+	or	index(TGT_Col_Val_Current,'.')<>0  then 
+case	when index(SRC_Col_Val_Current,':string')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+SET	SRC_Val3='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+	when	 index(SRC_Col_Val_Current,':int')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC || COMMA||Y||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Col_Val_Current || COMMA||Y||')';
+
+
+SET	SRC_Val3='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+
+
+	when	index(SRC_Col_Val_Current,':date')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC|| comma ||'date)'  ;
+SET	TGT_Val2='COALESCE ('|| TGT_Col_Val_Current|| comma ||'date)'  ;
+
+
+SET	SRC_Val3='COALESCE (CAST('|| TEMP_SRC || 'AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE (CAST('|| TGT_Col_Val_Current || 'AS VARCHAR(100))'|| COMMA ||''''||X||''''||')';
+
+else	
+
+SET	SRC_Val2=SRC_Col_Val_Current;
+set	TGT_Val2=TGT_Col_Val_Current;
+
+SET	SRC_Val3=SRC_Col_Val_Current;
+set	TGT_Val3=TGT_Col_Val_Current;
+
+end case	;
+else	
+case	when index(SRC_Col_Val_Current,':string')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'.'||TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+SET	SRC_Val3='COALESCE ('|| SRC_Table||'.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Table||'.'||TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+
+	when	 index(SRC_Col_Val_Current,':int')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'.'||TEMP_SRC || COMMA||Y||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'.'||TGT_Col_Val_Current || COMMA||Y||')';
+
+
+SET	SRC_Val3='COALESCE ('|| SRC_Table||'.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Table||'.'||TGT_Col_Val_Current || COMMA ||''''||X||''''||')';
+
+	when	index(SRC_Col_Val_Current,':date')<>0 then
+set	TEMP_SRC=substr(SRC_Col_Val_Current,0,index(SRC_Col_Val_Current,
+		':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'.'||TEMP_SRC|| comma ||'date)'  ;
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'.'||TGT_Col_Val_Current|| comma ||'date)'  ;
+
+SET	SRC_Val3='COALESCE (CAST('|| SRC_Table||'.'||TEMP_SRC || 'AS VARCHAR(100))'|| COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE (CAST('|| TGT_Table||'.'||TGT_Col_Val_Current || 'AS VARCHAR(100))'|| COMMA ||''''||X||''''||')';
+
+else	
+SET	SRC_Val2=SRC_Table||'.'||SRC_Col_Val_Current;
+set	TGT_Val2=TGT_Table||'.'||TGT_Col_Val_Current;
+
+SET	SRC_Val3=SRC_Table||'.'||SRC_Col_Val_Current;
+set	TGT_Val3=TGT_Table||'.'||TGT_Col_Val_Current;
+
+end case	;
+end case	;
+
+case	when index(SRC_Col_Val_Current,':')=0 then
+
+case	when index(SRC_Col_Val_Current,'cast(')<>0 then 
+SET	COL =substr(SRC_Col_Val_Current,index(SRC_Col_Val_Current,
+		'.')+1,index(SRC_Col_Val_Current,' as')-index(SRC_Col_Val_Current,
+		'.')-1);
+
+ELSE	
+SET	COL=SUBSTR(SRC_Col_Val_Current,INDEX(SRC_Col_Val_Current,'.')+1);
+END CASE	;
+else	
+case	when index(SRC_Col_Val_Current,'cast(')<>0 then 
+SET	COL =substr(SRC_Col_Val_Current,index(SRC_Col_Val_Current,
+		'.')+1,index(SRC_Col_Val_Current,' as')-index(SRC_Col_Val_Current,
+		'.'));
+
+ELSE	
+SET	COL =substr(SRC_Col_Val_Current,index(SRC_Col_Val_Current,
+		'.')+1,index(SRC_Col_Val_Current,':')-index(SRC_Col_Val_Current,
+		'.')-1);
+END CASE	;
+
+end case	;
+
+SET COL_LIST=COL_LIST||COL;
+set i=i+1;
+SET	Compare_Columns=Compare_Columns||SRC_Val2||'<>'||TGT_Val2||' )';
+
+
+SET	SEL_LIST=SEL_LIST||' CASE WHEN '|| SRC_Val2||'='||TGT_Val2|| ' THEN ''MATCH'' ELSE ' ||SRC_Val3|| MISMATCH ||TGT_Val3 || ' END AS '|| COL ;
+
+
+
+ 
+	WHEN	(SRC_Col_Index<>0 
+	AND	TGT_Col_Index<>0) THEN
+
+
+
+ 
+/* Divide the entire string by identifying the columns based on the '-' delimeter */
+SET	SRC_Val1=SUBSTR(SRC_Col_Val_Current,SRC_Pos1,SRC_Col_Index);
+SET	SRC_Col_Val_Current=SUBSTR(SRC_Col_Val_Current,SRC_Col_Index+1,
+		SRC_Col_Val_Length);
+SET	SRC_Col_Val_Length=chars(SRC_Col_Val);
+
+ 
+/* Divide the entire string by identifying the columns based on the '-' delimeter */
+SET	TGT_Val1=SUBSTR(TGT_Col_Val_Current,TGT_Pos1,TGT_Col_Index);
+SET	TGT_Col_Val_Current=SUBSTR(TGT_Col_Val_Current,TGT_Col_Index+1,
+		TGT_Col_Val_Length);
+SET	TGT_Col_Val_Length=chars(TGT_Col_Val);
+ 
+ 
+--n AND k USED TO WORK ON THE COMPOSITE KEY COLUMNS
+--CHECKING THE CAST CONDITION TFOR RENAMING IN SELECT LIST OF FINAL MISMATCH QUERY
+--COL   is for renaming purpose
+case	when n<k then 
+case	when index(SRC_Val1,'cast(')<>0 then 
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		' as')-index(SRC_Val1,'.')-1);
+
+ELSE	
+SET	COL=SUBSTR(SRC_Val1,INDEX(SRC_Val1,'.')+1);
+
+END CASE	;
+SET COL_LIST=COL_LIST||COL||COMMA;
+SET	SEL_LIST=SEL_LIST|| SRC_Val1||  ' AS '|| COL || COMMA;
+SET	Compare_Columns=Compare_Columns||SRC_Val1||'='||TGT_Val1||' AND ';
+set	n=n+1;
+set i=i+1;
+
+SET	SRC_PK=SRC_PK||SRC_Val1||COMMA;
+SET	TGT_PK=TGT_PK||TGT_Val1||COMMA;
+SET	SRC_WHERE =SRC_WHERE||'Trim(' ||SRC_Val1|| ')' ||MISMATCH;
+SET	TGT_WHERE=TGT_WHERE||'Trim(' ||TGT_Val1||')' ||MISMATCH;
+ 
+ 
+	when	k=n then 
+ 
+case	when index(SRC_Val1,'cast(')<>0 then 
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		' as')-index(SRC_Val1,'.')-1);
+
+ELSE	
+SET	COL=SUBSTR(SRC_Val1,INDEX(SRC_Val1,'.')+1);
+
+END CASE	;
+SET COL_LIST=COL_LIST||COL||COMMA;
+SET i=i+1;
+SET	SEL_LIST=SEL_LIST|| SRC_Val1||  ' AS '|| COL || COMMA;
+SET	Compare_Columns=Compare_Columns||SRC_Val1||'='||TGT_Val1||' AND (';
+set	n=k+1;
+
+SET	SRC_PK=SRC_PK||SRC_Val1;
+SET	TGT_PK=TGT_PK||TGT_Val1;
+SET	SRC_WHERE =SRC_WHERE||'Trim (' ||SRC_Val1||')';
+SET	TGT_WHERE=TGT_WHERE||'Trim('||TGT_Val1||')';
+else	
+
+
+case	when index(SRC_Val1,'.')<>0 
+	or	 index(TGT_Val1,'.')<>0 then 
+case	when index(SRC_Val1,':string')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Val1 || COMMA ||''''||X||''''||')';
+
+SET	SRC_Val3='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Val1 || COMMA ||''''||X||''''||')';
+
+
+	when	 index(SRC_Val1,':int')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC || COMMA||Y||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Val1 || COMMA||Y||')';
+
+SET	SRC_Val3='COALESCE ('|| TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Val1 || COMMA ||''''||X||''''||')';
+
+
+	when	index(SRC_Val1,':date')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+SET	SRC_Val2='COALESCE ('|| TEMP_SRC|| comma ||'date)'  ;
+SET	TGT_Val2='COALESCE ('|| TGT_Val1|| comma ||'date)'  ;
+
+SET	SRC_Val3='COALESCE (CAST('|| TEMP_SRC || 'AS VARCHAR(100))'|| COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE (CAST('|| TGT_Val1 || 'AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+
+
+else	
+SET	SRC_Val2=SRC_Val1;
+set	TGT_Val2=TGT_Val1;
+
+SET	SRC_Val3=SRC_Val1;
+set	TGT_Val3=TGT_Val1;
+
+end case	;
+else	
+case	when index(SRC_Val1,':string')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'.'||TGT_Val1 || COMMA ||''''||X||''''||')';
+
+SET	SRC_Val3='COALESCE ('|| SRC_Table||'.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Table||'.'||TGT_Val1 || COMMA ||''''||X||''''||')';
+
+
+	when	 index(SRC_Val1,':int')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'.'||TEMP_SRC || COMMA||Y||')';
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'.'||TGT_Val1 || COMMA||Y||')';
+
+SET	SRC_Val3='COALESCE ('|| SRC_Table||'.'||TEMP_SRC || COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE ('|| TGT_Table||'.'||TGT_Val1 || COMMA ||''''||X||''''||')';
+
+
+	when	index(SRC_Val1,':date')<>0 then
+set	TEMP_SRC=substr(SRC_Val1,0,index(SRC_Val1,':'));
+SET	SRC_Val2='COALESCE ('|| SRC_Table||'.'||TEMP_SRC|| comma ||'date)'  ;
+SET	TGT_Val2='COALESCE ('|| TGT_Table||'.'||TGT_Val1|| comma ||'date)'  ;
+
+
+SET	SRC_Val3='COALESCE (CAST('|| SRC_Table||'.'||TEMP_SRC || 'AS VARCHAR(100))'|| COMMA ||''''||X||''''||')';
+SET	TGT_Val3='COALESCE (CAST('|| TGT_Table||'.'||TGT_Val1|| 'AS VARCHAR(100))' || COMMA ||''''||X||''''||')';
+
+else	
+SET	SRC_Val2=SRC_Table||'.'||SRC_Val1;
+set	TGT_Val2=TGT_Table||'.'||TGT_Val1;
+
+SET	SRC_Val3=SRC_Table||'.'||SRC_Val1;
+set	TGT_Val3=TGT_Table||'.'||TGT_Val1;
+
+end case	;
+end case	;
+
+
+case	when index(SRC_Val1,':')=0 then
+case	when INDEX(SRC_Val1,'trim(')<>0 then 
+set	COL=substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,')')-index(SRC_Val1,
+		'.')-1);
+
+ 
+	when	index(SRC_Val1,'cast(')<>0 then 
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		' as')-index(SRC_Val1,'.')-1);
+
+ELSE	
+SET	COL=SUBSTR(SRC_Val1,INDEX(SRC_Val1,'.')+1);
+END CASE	;
+else	
+case	when INDEX(SRC_Val1,'trim(')<>0 then 
+set	COL=substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,')')-index(SRC_Val1,
+		'.')-1);
+ 
+	when	index(SRC_Val1,'cast(')<>0 then 
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		' as')-index(SRC_Val1,'.')-1);
+
+ELSE	
+SET	COL =substr(SRC_Val1,index(SRC_Val1,'.')+1,index(SRC_Val1,
+		':')-index(SRC_Val1,'.')-1);
+END CASE	;
+
+end case	;
+
+SET COL_LIST=COL_LIST||COL||COMMA;
+set i=i+1;
+SET	Compare_Columns=Compare_Columns||SRC_Val2||'<>'||TGT_Val2||' OR ';
+
+
+SET	SEL_LIST=SEL_LIST||' CASE WHEN '|| SRC_Val2||'='||TGT_Val2|| ' THEN ''MATCH'' ELSE ' ||SRC_Val3|| MISMATCH ||TGT_Val3 || ' END AS '|| COL || COMMA;
+
+
+end case	;
+
+
+ 
+END CASE	;
+IF	(SRC_Col_Index=0 
+	OR	TGT_Col_Index=0) THEN 
+	LEAVE	L1;
+END IF	;
+ 
+END LOOP	L1;
+SET n=0;
+
+SET	Final_Query = 'SELECT ' ||SEL_LIST || ' FROM ' ||SRC_DBName||'.'||SRC_Table ||'  '||SRC_Table|| COMMA   ||TGT_DBName||'.'||TGT_Table  ||'  '||TGT_Table|| '  WHERE ' ||Compare_Columns ||' AND '|| 
+SOURCE_WHERE || ' AND '|| TARGET_WHERE ;
+--Modified  Final_Query1,Final_Query2 :01/11/2013
+
+SET Final_Query1 = ' FROM ' ||SRC_DBName||'.'||SRC_Table ||  '  WHERE '|| SOURCE_WHERE || ' AND '||SRC_WHERE||' NOT IN (SEL '||TGT_WHERE ||' FROM '  ||TGT_DBName||'.'||TGT_Table ||  '  WHERE '|| TARGET_WHERE ||')';
+SET Final_Query2 = '  FROM '  ||TGT_DBName||'.'||TGT_Table||  '  WHERE '|| TARGET_WHERE ||' AND ' ||TGT_WHERE || ' NOT IN (SEL ' ||SRC_WHERE || ' FROM ' ||SRC_DBName||'.'||SRC_Table ||  ' WHERE '|| SOURCE_WHERE || ')';
+
+
+END CASE;
+
+SET COLUMN_LIST=COL_LIST;
+
+CASE WHEN PI_COLS<>'NO' THEN
+
+PKLOOP:WHILE n<k
+do
+SET COL_INDEX=POSITION(',' IN COL_LIST);
+SET PI_INDEX=POSITION('-' IN PI_COLS);
+
+SET COL_VAL1=SUBSTR(COL_LIST,0,COL_INDEX);
+
+CASE WHEN INDEX(PI_COLS,'-')=0 THEN
+SET PI_COL_VAL1=PI_COLS;
+ELSE
+SET PI_COL_VAL1=SUBSTR(PI_COLS,0,PI_INDEX);
+END CASE;
+
+CASE WHEN TRIM(COL_VAL1)=TRIM(PI_COL_VAL1) THEN
+SET COL_VAL2='''PI-DATA'''|| ' AS '||COL_VAL1||COMMA;
+SET COL_VAL3='''PI-DATA'''|| ' AS '||COL_VAL1||COMMA;
+set n=n+1;
+SET COL_LIST=SUBSTR(COL_LIST,COL_INDEX+1);
+SET PI_COLS=SUBSTR(PI_COLS,PI_INDEX+1);
+ELSE 
+SET COL_VAL2=COL_VAL1||COMMA;
+SET COL_VAL3=COL_VAL1||COMMA;
+SET COL_LIST=SUBSTR(COL_LIST,COL_INDEX+1);
+set n=n+1;
+END CASE;
+SET SELECT_LIST=SELECT_LIST||COL_VAL2;
+SET SELECT_LIST1=SELECT_LIST1||COL_VAL3;
+
+END WHILE PKLOOP;
+
+
+
+NONPKLOOP:WHILE n<=i-2
+
+do
+SET COL_INDEX=POSITION(',' IN COL_LIST);
+SET PI_INDEX=POSITION('-' IN PI_COLS);
+
+SET COL_VAL1=SUBSTR(COL_LIST,0,COL_INDEX);
+CASE WHEN INDEX(PI_COLS,'-')=0 THEN
+SET PI_COL_VAL1=PI_COLS;
+ELSE
+SET PI_COL_VAL1=SUBSTR(PI_COLS,0,PI_INDEX);
+END CASE;
+
+CASE WHEN TRIM(COL_VAL1)=TRIM(PI_COL_VAL1) THEN
+SET COL_VAL2='CASE WHEN '||COL_VAL1||'=''MATCH'' THEN '||COL_VAL1||' ELSE '||''' PI_DATA_MISMATCH '''||' END AS ' ||COL_VAL1||COMMA;
+SET COL_VAL3='''PI-DATA'''|| ' AS '||COL_VAL1||COMMA;
+set n=n+1;
+SET COL_LIST=SUBSTR(COL_LIST,COL_INDEX+1);
+SET PI_COLS=SUBSTR(PI_COLS,PI_INDEX+1);
+ELSE 
+SET COL_VAL2=COL_VAL1||',';
+SET COL_VAL3=COL_VAL1||',';
+SET COL_LIST=SUBSTR(COL_LIST,COL_INDEX+1);
+set n=n+1;
+END CASE;
+
+SET SELECT_LIST=SELECT_LIST||COL_VAL2;
+SET SELECT_LIST1=SELECT_LIST1||COL_VAL3;
+
+END WHILE NONPKLOOP;
+
+
+
+CASE WHEN n=i-1 THEN
+CASE WHEN TRIM(COL_LIST)=TRIM(PI_COLS) THEN
+SET COL_VAL2='CASE WHEN '||COL_LIST||'=''MATCH'' THEN '||COL_LIST||' ELSE '||''' PI_DATA_MISMATCH '''||' END AS '||COL_LIST;
+SET COL_VAL3='''PI-DATA'''|| ' AS '||COL_LIST;
+ELSE
+SET COL_VAL2=COL_LIST;
+SET COL_VAL3=COL_LIST;
+END CASE;
+
+ELSE 
+set i=i+1;
+END CASE;
+ 
+SET SELECT_LIST=SELECT_LIST||COL_VAL2;
+SET SELECT_LIST1=SELECT_LIST1||COL_VAL3;
+
+CASE WHEN TRIM(SRC_Table)=TRIM(TGT_Table) THEN
+
+SET SRC_COUNT_QUERY='SELECT COUNT(*) FROM '||SRC_DBName||'.'||SRC_Table||' '|| SRC_Table||'1' ||  '  WHERE '|| SOURCE_WHERE ;
+SET TGT_COUNT_QUERY='SELECT COUNT(*) FROM ' ||TGT_DBName||'.'||TGT_Table ||' '|| TGT_Table||'2' ||  '  WHERE '|| TARGET_WHERE;
+
+
+else
+
+SET SRC_COUNT_QUERY='SELECT COUNT(*) FROM '||SRC_DBName||'.'||SRC_Table ||  '  WHERE '|| SOURCE_WHERE ;
+SET TGT_COUNT_QUERY='SELECT COUNT(*) FROM ' ||TGT_DBName||'.'||TGT_Table||  '  WHERE '|| TARGET_WHERE;
+
+
+END CASE;
+
+SET sqlQueryGen= 'SELECT '||SELECT_LIST ||' FROM ('|| Final_Query||')DER_TAB'||';'|| 'SELECT ' || SELECT_LIST1|| Final_Query1||';'||  'SELECT ' || SELECT_LIST1|| Final_Query2||';'||SRC_COUNT_QUERY||';'||TGT_COUNT_QUERY||';'||COLUMN_LIST;
+--SET sqlQueryGen=SELECT_LIST1;
+
+ELSE 
+
+CASE WHEN TRIM(SRC_Table)=TRIM(TGT_Table) THEN
+
+SET SRC_COUNT_QUERY='SELECT COUNT(*) FROM '||SRC_DBName||'.'||SRC_Table||' '|| SRC_Table||'1' ||  '  WHERE '|| SOURCE_WHERE ;
+SET TGT_COUNT_QUERY='SELECT COUNT(*) FROM ' ||TGT_DBName||'.'||TGT_Table ||' '|| TGT_Table||'2' ||  '  WHERE '|| TARGET_WHERE;
+
+ELSE
+
+SET SRC_COUNT_QUERY='SELECT COUNT(*) FROM '||SRC_DBName||'.'||SRC_Table ||  '  WHERE '|| SOURCE_WHERE ;
+SET TGT_COUNT_QUERY='SELECT COUNT(*) FROM ' ||TGT_DBName||'.'||TGT_Table||  '  WHERE '|| TARGET_WHERE;
+
+END CASE;
+
+SET sqlQueryGen=Final_Query||';'|| ' SELECT * ' ||Final_Query1||';'|| 'SELECT * ' ||  Final_Query2||';'||SRC_COUNT_QUERY||';'||TGT_COUNT_QUERY||';'||COLUMN_LIST;
+
+
+END CASE;
+
+
+ 
+END	;
