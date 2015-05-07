@@ -1,0 +1,450 @@
+#!/bin/ksh
+###########################################################################
+###########################################################################
+## Program       : ICDW_table_to_table_compare.ksh
+## Description   : Executes the queries generated from the stored procedure and sends the email notifications
+## Parameters    : $1 - Parameter file
+##               : $2 - Mart Name
+##               : $3 - Frequency of the job
+##               : $4 - ODATE from Control-M
+##
+###########################################################################
+
+####Reading the parameters present in Param file
+###To print the ODATE in Control M Log
+export order_date=$4
+echo $4
+echo $order_date
+in_mart=$2
+in_frequency=$3
+homedir=`pwd`
+logfile=$homedir/SUMMARY_REPORT_$$.txt
+while read line
+do
+##################
+
+flag=0
+##################################Body or content of the mail
+start=`date`
+echo "
+Hi,
+The attached file contains the details of mismatches reported between source and target tables. Following is highlevel Summary of that.
+
+Inside the File:
+1) A Tilda separator is used to indicate the difference between Source and Target attribute values. For Ex: XYZ~FXR indicates
+that the attribute value of XYZ in Source has been changed to FXR in target.
+2) MATCH indicates that Source and target attributes values are in sync with one another.
+
+Summary:
+
+ODATE:$order_date
+
+">$logfile
+###########################NEW CODE#######
+echo $order_date
+
+mart=` echo $line | cut -f1 -d 'Ç'  `
+echo $mart
+frequency=` echo $line | cut -f2 -d 'Ç'  `
+echo $frequency
+if [[ $mart = $in_mart && $frequency = $in_frequency ]];
+then
+sor=` echo $line | cut -f3 -d 'Ç'  `
+tar=` echo $line | cut -f4 -d 'Ç'  `
+src_where1=` echo $line | cut -f5 -d 'Ç' | sed "s/order_date/$order_date/g" `
+src_where=$src_where1
+
+echo $src_where
+tgt_where1=` echo $line | cut -f6 -d 'Ç' | sed "s/order_date/$order_date/g"  `
+tgt_where=$tgt_where1
+
+echo $tgt_where
+
+pkcol=` echo $line | cut -f7 -d 'Ç'  `
+srccol=` echo $line | cut -f8 -d 'Ç'  `
+
+trccol=` echo $line | cut -f9 -d 'Ç'  `
+picol=` echo $line | cut -f10 -d 'Ç'  `
+sample=` echo $line | cut -f11 -d 'Ç'  `
+mailids=` echo $line | cut -f12 -d 'Ç'  `
+ETL_ID=` echo $line | cut -f13 -d 'Ç'  `
+col_flag=` echo $line | cut -f14 -d 'Ç'  `
+######################################################################
+##  LOGIN with ETL IDs
+######################################################################
+#######################
+echo " START TIME OF COMPARISON    : $start" >>$logfile
+echo "---------------------------------------------------------------------------------">>$logfile
+
+######################################################################
+##  Calling the Stored Procedure using the login file generated based on integration ETL ID
+######################################################################
+bteq << EOF>$homedir/teradata_proc_$$.log
+
+.RUN FILE=$configfile1
+.set width 65000
+.EXPORT  FILE = $homedir/query_$$.txt;
+
+CALL ICDW_SPROC.SPROC_FL_EDW_TO_ICDW_COMPARE('$sor','$tar','$src_where','$tgt_where',$pkcol,'$srccol','$trccol','$picol',sqlQueryGen);
+
+.LOGOFF
+.EXIT
+EOF
+errt=`grep -i -w "(return code) = 0" $homedir/teradata_proc_$$.log| wc -l `
+############# ERROR Message
+if [ $errt -eq 0 ];
+then
+echo " ERROR: Error has Occurred during the execution of procedure " >$logfile
+(echo " ERROR: Error has Occurred during the execution of procedure "
+echo " SOURCE TABLE NAME            :   $sor  "
+echo " TARGET TABLE NAME            :  $tar  ";uuencode $homedir/teradata_proc_$$.log Teradata_Error_log_Proc.txt) | mail -s  "$in_mart - RECON SUMMARY REPORT - ($sor : $tar)" $mailids
+
+rm -rf $homedir/SUMMARY_REPORT_$$.txt
+flag=1
+continue
+fi
+
+######################################################################
+##  Splitting the dynamically queries generated from Stored procedure using UNIX commands
+######################################################################
+
+x="sample "$sample
+
+sed 1,2d query_$$.txt | awk -v x="$x"  -F\; '{print $1 " " x  ";"}'  > $homedir/mismatch_query_$$.sql
+sed 1,2d query_$$.txt | awk -v x="$x" -F\; '{print $2 " " x ";" }'  > $homedir/src_not_tgt_query_$$.sql
+sed 1,2d query_$$.txt | awk -v x="$x" -F\; '{print $3 " " x ";" }'  > $homedir/tgt_not_src_query_$$.sql
+
+sed 1,2d query_$$.txt | awk  -F\; '{print $1 ";"}'  > $homedir/Queries_$$.txt
+sed 1,2d query_$$.txt | awk  -F\; '{print $2 ";"}' >> $homedir/Queries_$$.txt
+sed 1,2d query_$$.txt | awk  -F\; '{print $3 ";"}' >> $homedir/Queries_$$.txt
+sed 1,2d query_$$.txt | awk  -F\; '{print $4 ";"}' >> $homedir/Queries_$$.txt
+sed 1,2d query_$$.txt | awk  -F\; '{print $5 ";"}' >> $homedir/Queries_$$.txt
+
+
+echo "select count(*) from ( `sed 1,2d query_$$.txt | awk -F\; '{print $1}' `)k;" > $homedir/mismatch_records_count_$$.sql
+echo "select count(*) from ( `sed 1,2d query_$$.txt | awk -F\; '{print $2}' `)k;" >> $homedir/mismatch_records_count_$$.sql
+echo "select count(*) from ( `sed 1,2d query_$$.txt | awk -F\; '{print $3}' `)k;" >> $homedir/mismatch_records_count_$$.sql
+sed 1,2d query_$$.txt | awk -F\; '{print $4";"}'>> $homedir/mismatch_records_count_$$.sql
+sed 1,2d query_$$.txt | awk -F\; '{print $5";"}'>> $homedir/mismatch_records_count_$$.sql
+
+sed 1,2d query_$$.txt | awk -F\; '{print $6}' > $homedir/column_list_$$.txt
+
+sed 1,2d query_$$.txt | awk -F\; '{print $1}' > $homedir/mismatchmain_$$.txt
+
+
+>$homedir/mismatch_count_$$.txt;
+
+######################################################################
+##  Execution of Mismatch Count,Source Count,Target Count,
+##  Count of source records not present in target and
+##  Count of Target records not present in Source
+######################################################################
+
+bteq << EOF>$homedir/teradata_mismatch_count_$$.log
+.RUN FILE=$configfile
+.set retlimit 0,500
+.set width 65000
+.SET SEPARATOR ','
+.SET RECORDMODE OFF
+.EXPORT  FILE = $homedir/mismatch_count_$$.txt;
+database ICDW_CB_GBL_V;
+. run file $homedir/mismatch_records_count_$$.sql
+
+.LOGOFF
+.EXIT
+EOF
+
+errt=`grep -i -w "(return code) = 0" $homedir/teradata_mismatch_count_$$.log | wc -l `
+#################### ERROR MESSAGE
+if [ $errt -eq 0 ];
+then
+echo " ERROR: Error has Occurred during the execution of mismatch query " >$logfile
+(echo " ERROR: Error has Occurred during the execution of mismatch query"
+echo " SOURCE TABLE NAME            :   $sor  "
+echo " TARGET TABLE NAME            :  $tar  ";uuencode $homedir/teradata_mismatch_count_$$.log Teradata_Error_log_mismatch_count.txt) | mail -s  "$in_mart - RECON SUMMARY REPORT - ($sor : $tar)" $mailids
+#return 1
+rm -rf $homedir/SUMMARY_REPORT_$$.txt
+flag=1
+continue
+fi
+
+########Execution of mismatch Query
+
+
+bteq << EOF>$homedir/teradata_mismatch_$$.log
+.RUN FILE=$configfile
+.set retlimit 0,500
+.set width 65000
+
+.SET SEPARATOR ','
+.SET RECORDMODE OFF
+.EXPORT  FILE = $homedir/mismatchreportt_$$.txt;
+
+database ICDW_CB_GBL_V;
+. run file $homedir/mismatch_query_$$.sql
+
+.LOGOFF
+.EXIT
+EOF
+
+errt=`grep -i -w "(return code) = 0" $homedir/teradata_mismatch_$$.log | wc -l `
+####### ERROR MESSAGE
+if [ $errt -eq 0 ];
+then
+echo " ERROR: Error has Occurred during the execution of mismatch query" >$logfile
+(echo " ERROR: Error has Occurred during the execution of mismatch query"
+echo " SOURCE TABLE NAME            :   $sor  "
+echo " TARGET TABLE NAME            :  $tar  ";uuencode $homedir/teradata_mismatch_$$.log Teradata_Error_log_mismatch.txt) | mail -s  "$in_mart - RECON SUMMARY REPORT - ($sor : $tar)" $mailids
+#return 1
+flag=1
+continue
+fi
+
+########### EXECUTION OF THE QUERY SOURCE RECORDS NOT PRESENT IN TARGET
+
+>$homedir/src_not_tgt_$$.txt
+bteq << EOF>$homedir/teradata_src_tgt_$$.log
+.RUN FILE=$configfile
+.set retlimit 0,500
+.set width 65000
+.SET SEPARATOR ','
+.SET RECORDMODE OFF
+.EXPORT  FILE = $homedir/src_not_tgt_$$.txt;
+database ICDW_CB_GBL_V;
+
+. run file $homedir/src_not_tgt_query_$$.sql
+
+.LOGOFF
+
+.EXIT
+EOF
+
+
+errt=`grep -i -w "(return code) = 0" $homedir/teradata_src_tgt_$$.log| wc -l `
+####################ERROR MESSAGE
+if [ $errt -eq 0 ];
+then
+echo " ERROR: Error has Occurred during the execution of query for the records present in source not present in target " >$logfile
+(echo " ERROR: Error has Occurred during the execution of query for the records present in source not present in target"
+echo " SOURCE TABLE NAME            :   $sor  "
+echo " TARGET TABLE NAME            :  $tar  ";uuencode $homedir/teradata_src_tgt_$$.log Teradata_Error_log_src_tgt.txt) | mail -s  "$in_mart - RECON SUMMARY REPORT - ($sor : $tar)" $mailids
+#return 1
+flag=1
+continue
+fi
+
+
+sed -n 1p $homedir/src_not_tgt_$$.txt > $homedir/src_not_tgt1_$$.txt
+
+tail +3 $homedir/src_not_tgt_$$.txt > $homedir/src_not_tgt2_$$.txt
+
+cat $homedir/src_not_tgt1_$$.txt $homedir/src_not_tgt2_$$.txt > $homedir/src_not_tgt_final_$$.txt
+
+rm -rf $homedir/src_not_tgt1_$$.txt $homedir/src_not_tgt2_$$.txt
+
+>$homedir/tgt_not_src_$$.txt
+###########################EXECUTION OF THE QUERY TARGET RECORDS NOT PRESENT IN SOURCE
+
+bteq << EOF>$homedir/teradata_tgt_src_$$.log
+.RUN FILE=$configfile
+.set retlimit 0,500
+.set width 65000
+.SET SEPARATOR ','
+.SET RECORDMODE OFF
+.EXPORT  FILE = $homedir/tgt_not_src_$$.txt;
+
+database ICDW_CB_GBL_V;
+.run file $homedir/tgt_not_src_query_$$.sql
+.LOGOFF
+.EXIT
+EOF
+
+
+errt=`grep -i -w "(return code) = 0" $homedir/teradata_tgt_src_$$.log| wc -l `
+##########ERROR MESSAGE
+if [ $errt -eq 0 ];
+then
+echo " ERROR: Error has Occurred during the execution of query for the records present in target not present in source " >$logfile
+(echo " ERROR: Error has Occurred during the execution of query for the records present in target not present in source"
+echo " SOURCE TABLE NAME            :   $sor  "
+echo " TARGET TABLE NAME            :  $tar  ";uuencode $homedir/teradata_tgt_src_$$.log Teradata_Error_log_tgt_src.txt) | mail -s  "$in_mart - RECON SUMMARY REPORT - ($sor : $tar)" $mailids
+#return 1
+flag=1
+continue
+fi
+
+
+sed -n 1p $homedir/tgt_not_src_$$.txt > $homedir/tgt_not_src1_$$.txt
+
+tail +3 $homedir/tgt_not_src_$$.txt > $homedir/tgt_not_src2_$$.txt
+
+cat $homedir/tgt_not_src1_$$.txt $homedir/tgt_not_src2_$$.txt > $homedir/tgt_not_src_final_$$.txt
+
+rm -rf $homedir/tgt_not_src1_$$.txt $homedir/tgt_not_src2_$$.txt
+
+############Final SUMMARY REPORT
+
+echo " SOURCE TABLE NAME            :   $sor  ">>$logfile
+echo " TARGET TABLE NAME            :  $tar  ">>$logfile
+echo " SOURCE COUNT                 : `sed -n 12p $homedir/mismatch_count_$$.txt` ">>$logfile
+echo " TARGET COUNT                 : `sed -n 15p $homedir/mismatch_count_$$.txt` ">>$logfile
+echo " MISMATCH RECORDS COUNT       : `sed -n 3p $homedir/mismatch_count_$$.txt` ">>$logfile
+
+echo " NO OF RECORDS PRESENT IN
+       SOURCE NOT EXISTS IN TARGET  :  `sed -n 6p $homedir/mismatch_count_$$.txt` ">>$logfile
+echo " NO OF RECORDS PRESENT IN
+       TARGET NOT EXISTS IN SOURCE  :  `sed -n 9p $homedir/mismatch_count_$$.txt` ">>$logfile
+
+end=`date`
+echo "---------------------------------------------------------------------------------">>$logfile
+echo " END TIME OF COMPARISON       : $end " >>$logfile
+echo "---------------------------------------------------------------------------------">>$logfile
+
+
+sed -n 1p $homedir/mismatchreportt_$$.txt > $homedir/mismatchreport1_$$.txt
+
+tail +3 $homedir/mismatchreportt_$$.txt > $homedir/mismatchreport2_$$.txt
+
+cat $homedir/mismatchreport1_$$.txt $homedir/mismatchreport2_$$.txt > $homedir/mismatchreport_$$.txt
+
+rm -rf $homedir/mismatchreport1_$$.txt $homedir/mismatchreport2_$$.txt
+
+cat $homedir/mismatchreport_$$.txt | tr -d '\040'  > $homedir/mismatchfinal_$$.txt
+#cat $logfile $homedir/mismatchfinal_$$.txt >$homedir/Final_Summary_Report_$$.txt
+
+snt=`sed -n 12p $homedir/query_$$.txt`
+tns=`sed -n 15p $homedir/query_$$.txt`
+miscnt=`sed -n 9p $homedir/query_$$.txt`
+
+mv $homedir/mismatchfinal_$$.txt $homedir/mismatchfinal_$$.csv
+mv $homedir/src_not_tgt_final_$$.txt $homedir/src_not_tgt_final_$$.csv
+mv $homedir/tgt_not_src_final_$$.txt $homedir/tgt_not_src_final_$$.csv
+
+gzip $homedir/mismatchfinal_$$.csv
+gzip $homedir/src_not_tgt_final_$$.csv
+gzip $homedir/tgt_not_src_final_$$.csv
+
+###############################MISMATCH COLUMN COUNT###########################
+###############################MISMATCH COLUMN COUNT###########################
+mail_flag=0
+
+if [[ $col_flag = 'Y' ]];
+
+then
+>$homedir/volatile_$$.sql
+
+echo "CREATE VOLATILE TABLE TEMP1_$$ AS ( `cat $homedir/mismatchmain_$$.txt` )WITH DATA ON COMMIT PRESERVE ROWS;">>$homedir/volatile_$$.sql
+
+i=0
+> $homedir/colcount_$$.sql
+echo "Column Name,Mismatch Count">$homedir/column_mismatch_count_$$.txt
+for colval in $(cat $homedir/column_list_$$.txt | tr ',' '\n' )
+
+do
+(( i = i + 1 ))
+
+if [ $i -gt $pkcol ];
+then
+echo " SELECT '$colval' as $colval ,count(*) from TEMP1_$$ where cast($colval as varchar(20000)) like'%~%' or cast($colval as
+varchar(20000))<>'MATCH'; " >> $homedir/colcount_$$.sql
+else
+echo " $colval ,Primary Key Column" >>$homedir/column_mismatch_count_$$.txt
+fi
+done
+
+
+bteq <<EOF>$homedir/colcount_mismatch_$$.log
+.RUN FILE=$configfile
+.set retlimit 0,500
+.set width 65000
+.SET SEPARATOR ','
+.SET RECORDMODE OFF
+.EXPORT  FILE = $homedir/colmismatchcount_$$.txt;
+
+. run file $homedir/volatile_$$.sql
+. run file $homedir/colcount_$$.sql
+
+.LOGOFF
+.EXIT
+
+EOF
+
+awk '// {if ((NR % 3) == 0) print $0 }' colmismatchcount_$$.txt >>$homedir/column_mismatch_count_$$.txt
+rm -rf $homedir/colmismatchcount_$$.txt
+
+
+else
+mail_flag=3
+fi
+
+##########################################################################################
+
+if [ $flag -eq 0 ]; then
+if [ $mail_flag -eq 3 ];
+then
+(cat $logfile;uuencode $homedir/mismatchfinal_$$.csv.gz mismatchfinal.csv.gz;uuencode $homedir/src_not_tgt_final_$$.csv.gz src_not_tgt_final.csv.gz;uuencode $homedir/tgt_not_src_final_$$.csv.gz tgt_not_src_final.csv.gz;uuencode $homedir/Queries_$$.txt Queries.txt) | mail -s  "$in_mart - RECON SUMMARY REPORT - ($sor : $tar)" $mailids
+else
+(cat $logfile;uuencode $homedir/mismatchfinal_$$.csv.gz mismatchfinal.csv.gz;uuencode $homedir/src_not_tgt_final_$$.csv.gz src_not_tgt_final.csv.gz;uuencode $homedir/tgt_not_src_final_$$.csv.gz tgt_not_src_final.csv.gz ;uuencode $homedir/column_mismatch_count_$$.txt column_mismatch_count.csv;uuencode $homedir/Queries_$$.txt Queries.txt) | mail -s  "$in_mart - RECON SUMMARY REPORT - ($sor : $tar)" $mailids
+
+fi
+fi
+#fi
+
+
+
+#########Clean Up of extra generated files###############
+
+chmod 777 $homedir/*.*
+
+rm  -rf $configfile1
+rm -rf $configfile
+rm -rf $homedir/SUMMARY_REPORT_$$.txt
+rm -rf $homedir/teradata_proc_$$.log
+rm -rf $homedir/query_$$.txt
+rm -rf $homedir/teradat_count_records_$$.log
+rm -rf $homedir/count_records_$$.txt
+rm -rf $homedir/mismatch_query_$$.sql
+rm -rf $homedir/src_not_tgt_query_$$.sql
+rm -rf $homedir/tgt_not_src_query_$$.sql
+rm -rf $homedir/mismatch_records_count_$$.sql
+rm -rf $homedir/mismatch_count_$$.txt
+rm -rf $homedir/teradata_mismatch_count_$$.log
+rm -rf $homedir/mismatch_count_$$.txt
+rm -rf $homedir/teradata_mismatch_$$.log
+rm -rf $homedir/mismatchreportt_$$.txt
+rm -rf $homedir/teradata_src_tgt_$$.log
+rm -rf $homedir/src_not_tgt_$$.txt
+rm -rf $homedir/src_not_tgt1_$$.txt
+rm -rf $homedir/src_not_tgt2_$$.txt
+rm -rf $homedir/src_not_tgt_final_$$.txt
+rm -rf $homedir/teradata_tgt_src_$$.log
+rm -rf $homedir/tgt_not_src_$$.txt
+rm -rf $homedir/tgt_not_src1_$$.txt
+rm -rf $homedir/tgt_not_src2_$$.txt
+rm -rf $homedir/tgt_not_src_final_$$.txt
+rm -rf $homedir/mismatchreport1_$$.txt
+rm -rf $homedir/mismatchreport2_$$.txt
+rm -rf $homedir/mismatchreport_$$.txt
+rm -rf $homedir/mismatchfinal_$$.txt
+rm -rf $homedir/Final_Summary_Report_$$.txt
+rm -rf $homedir/final_logfile_$$.txt
+rm -rf $homedir/mismatchfinal_$$.csv
+rm -rf $homedir/src_not_tgt_final_$$.csv
+rm -rf $homedir/tgt_not_src_final_$$.csv
+rm -rf $homedir/mismatchfinal_$$.csv.gz
+rm -rf $homedir/src_not_tgt_final_$$.csv.gz
+rm -rf $homedir/tgt_not_src_final_$$.csv.gz
+rm -rf $homedir/column_mismatch_count_$$.txt
+rm -rf $homedir/column_list_$$.txt
+rm -rf $homedir/mismatchmain_$$.txt
+rm -rf $homedir/colcount_$$.sql
+rm -rf $homedir/colcount_mismatch_$$.log
+rm -rf $homedir/colmismatchcount_$$.txt
+rm -rf $homedir/Queries_$$.txt
+rm -rf $homedir/volatile_$$.sql
+
+else
+rm -rf $homedir/SUMMARY_REPORT_$$.txt
+echo "not a "$in_frequency
+fi
+done<$1
